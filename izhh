@@ -83,6 +83,21 @@ local origGravity    = workspace.Gravity
 local origClockTime  = LGT.ClockTime
 local origAtmDensity = (LGT:FindFirstChildOfClass("Atmosphere") and LGT:FindFirstChildOfClass("Atmosphere").Density) or 0
 
+-- Snapshot ALL map parts at startup so Reset World restores them perfectly
+local origPartData = {}  -- [part] = {Color, Material, Transparency, CastShadow}
+task.defer(function()
+    for _, v in pairs(workspace:GetDescendants()) do
+        if v:IsA("BasePart") then
+            origPartData[v] = {
+                Color        = v.Color,
+                Material     = v.Material,
+                Transparency = v.Transparency,
+                CastShadow   = v.CastShadow,
+            }
+        end
+    end
+end)
+
 local refs  = {}
 local conns = {}
 local MIN_W, MIN_H = 460, 340
@@ -290,8 +305,9 @@ local function mkTopBtn(text,bgCol,txtCol,offX)
     b.MouseLeave:Connect(function() tween(b,{BackgroundColor3=og},0.1) end)
     return b
 end
-local MinBtn   = mkTopBtn("—", Color3.fromRGB(10,28,14), C.green, -78)
-local CloseBtn = mkTopBtn("✕", Color3.fromRGB(65,14,14), C.red,   -42)
+local MinBtn   = mkTopBtn("—", Color3.fromRGB(10,28,14), C.green, -116)
+local MaxBtn   = mkTopBtn("□", Color3.fromRGB(10,28,14), C.green,  -80)
+local CloseBtn = mkTopBtn("X", Color3.fromRGB(65,14,14), C.red,    -42)
 
 -- ================================================================
 --  SIDEBAR
@@ -576,7 +592,7 @@ do
     sec(f,"Welcome")
     inf(f,"🧪  INFZ3rk HUB  —  Tester Mode\nUse the tabs on the left to navigate.",44)
     sec(f,"Quick controls")
-    inf(f,"[ M ] Show/Hide  •  [ F ] Fly  •  [ Q ] Aimbot  •  [ Z ] Teleport\n[ — ] Minimize  •  [ ✕ ] Hide  •  bottom corner ◼ = Resize",44)
+    inf(f,"[ M ] Show/Hide  •  [ F ] Fly  •  [ Q ] Aimbot  •  [ Z ] Teleport\n[ — ] Minimize  •  [ □ ] Maximize  •  [ X ] Hide  •  corner ◼ = Resize",44)
     sec(f,"Live statistics")
     local g1=grid(f)
     local _,vFPS=card(g1,"FPS","...")
@@ -1081,22 +1097,30 @@ do
 
     sec(f,"Full world reset")
     btn(f,"🔄  RESET WORLD — Restore everything",Color3.fromRGB(14,55,22),function()
+        -- Time loop
         if timeLoopConn then timeLoopConn:Disconnect(); timeLoopConn=nil end
         if refs["timeLoop"] then refs["timeLoop"].setState(false) end
         LGT.ClockTime=origClockTime
+        -- Lighting
         LGT.Ambient=origAmbient; LGT.Brightness=origBright; LGT.GlobalShadows=origShadows
+        -- Atmosphere
         local atm=LGT:FindFirstChildOfClass("Atmosphere")
         if atm then atm.Density=origAtmDensity end
+        -- Gravity
         workspace.Gravity=origGravity
-        for _,v in pairs(workspace:GetDescendants()) do
-            if v:IsA("BasePart") then
-                pcall(function()
-                    v.Transparency=0
-                    v.Material=Enum.Material.SmoothPlastic
-                    v.Color=v.BrickColor.Color
-                end)
-            end
+        -- Restore every map part from the snapshot taken at startup
+        for part, data in pairs(origPartData) do
+            pcall(function()
+                if part and part.Parent then
+                    part.Color        = data.Color
+                    part.Material     = data.Material
+                    part.Transparency = data.Transparency
+                    part.CastShadow   = data.CastShadow
+                end
+            end)
         end
+        -- Also turn off Chams if active (they colour player parts)
+        if refs["chams"] and refs["chams"].getState() then refs["chams"].setState(false) end
         notify("🔄  World fully restored",C.green)
     end)
 end
@@ -1209,7 +1233,7 @@ do
     )
 
     sec(f,"HUB controls")
-    inf(f,"[ M ] Show/Hide  •  [ — ] Minimize  •  [ ✕ ] Hide\nbottom-right corner ◼ = resize",44)
+    inf(f,"[ M ] Show/Hide  •  [ — ] Minimize  •  [ □ ] Maximize  •  [ X ] Hide\nbottom-right corner ◼ = resize",44)
 
     sec(f,"General reset")
     btn(f,"⚠️  Turn OFF all toggles",Color3.fromRGB(65,14,8),function()
@@ -1235,20 +1259,59 @@ do
 
     sec(f,"Danger Zone")
     btn(f,"☠️  DISCONNECT HUB — Destroy completely",Color3.fromRGB(90,10,10),function()
+        -- 1. Turn off all toggles (triggers their OFF callbacks)
         for _,r in pairs(refs) do if r.getState and r.getState() then pcall(r.setState,false) end end
+        -- 2. Restore character stats
         local h=getHum(); if h then h.WalkSpeed=16; h.JumpPower=50 end
+        -- 3. Remove fly objects
         local hrp=getHRP(); if hrp then
             if hrp:FindFirstChild("FlyBV") then hrp.FlyBV:Destroy() end
             if hrp:FindFirstChild("FlyBG") then hrp.FlyBG:Destroy() end
         end
+        -- 4. Restore collision (noclip)
+        local char=getChar(); if char then
+            for _,p in pairs(char:GetDescendants()) do
+                if p:IsA("BasePart") then pcall(function() p.CanCollide=true end) end
+            end
+        end
+        -- 5. Restore character transparency (invisible was on)
+        if char then
+            for _,p in pairs(char:GetDescendants()) do
+                if p:IsA("BasePart") then pcall(function() p.LocalTransparencyModifier=0 end) end
+            end
+        end
+        -- 6. Restore world lighting & gravity
         workspace.Gravity=origGravity
         LGT.Ambient=origAmbient; LGT.Brightness=origBright; LGT.GlobalShadows=origShadows
+        LGT.ClockTime=origClockTime
+        local atm=LGT:FindFirstChildOfClass("Atmosphere")
+        if atm then atm.Density=origAtmDensity end
+        -- 7. Restore map parts from snapshot
+        for part, data in pairs(origPartData) do
+            pcall(function()
+                if part and part.Parent then
+                    part.Color=data.Color; part.Material=data.Material
+                    part.Transparency=data.Transparency; part.CastShadow=data.CastShadow
+                end
+            end)
+        end
+        -- 8. Restore hitboxes
+        for _,p in pairs(hitboxParts) do
+            pcall(function() if p and p.Parent then p.Size=Vector3.new(2,2,1) end end)
+        end
+        hitboxParts={}
+        -- 9. Restore camera
         cam.FieldOfView=70; lp.CameraMinZoomDistance=0.5; lp.CameraMaxZoomDistance=400
+        -- 10. Clear all ESP drawings
         for p,_ in pairs(espObjs) do espDestroy(p) end; espObjs={}
+        -- 11. Disconnect every running connection
         for _,c in pairs(conns) do pcall(function() c:Disconnect() end) end
-        if rainbowConn then rainbowConn:Disconnect() end
-        if timeLoopConn then timeLoopConn:Disconnect() end
+        if rainbowConn  then rainbowConn:Disconnect()  end
+        if timeLoopConn then timeLoopConn:Disconnect()  end
         if chatNotifConn then pcall(function() chatNotifConn:Disconnect() end) end
+        -- 12. Restore Roblox GUI
+        pcall(function() SG:SetCoreGuiEnabled(Enum.CoreGuiType.All,true) end)
+        -- 13. Destroy the HUB GUIs
         task.delay(0.15,function()
             pcall(function() NotifGui:Destroy() end)
             pcall(function() SGui:Destroy() end)
@@ -1257,12 +1320,14 @@ do
 end
 
 -- ================================================================
---  MINIMIZE / CLOSE
+--  MINIMIZE / CLOSE / MAXIMIZE
 -- ================================================================
 local minimized=false
+local maximized=false
 local savedW,savedH=650,450
 
 MinBtn.MouseButton1Click:Connect(function()
+    if maximized then return end  -- can't minimize while maximized
     minimized=not minimized
     if minimized then
         savedW=MF.AbsoluteSize.X; savedH=MF.AbsoluteSize.Y
@@ -1275,7 +1340,24 @@ MinBtn.MouseButton1Click:Connect(function()
     end
 end)
 
+MaxBtn.MouseButton1Click:Connect(function()
+    minimized=false
+    maximized=not maximized
+    if maximized then
+        savedW=MF.AbsoluteSize.X; savedH=MF.AbsoluteSize.Y
+        local vp=cam.ViewportSize
+        tween(MF,{Size=UDim2.new(0,vp.X,0,vp.Y),Position=UDim2.new(0,0,0,0)},0.2)
+        SB.Visible=true; CA.Visible=true; Glow.Visible=true; RH.Visible=true
+        MaxBtn.Text="❐"
+    else
+        tween(MF,{Size=UDim2.new(0,savedW,0,savedH),
+                  Position=UDim2.new(0.5,-savedW/2,0.5,-savedH/2)},0.2)
+        MaxBtn.Text="□"
+    end
+end)
+
 CloseBtn.MouseButton1Click:Connect(function()
+    maximized=false; MaxBtn.Text="□"
     MF.Visible=false; Glow.Visible=false
     -- No "press M" notification — intentionally removed
 end)
@@ -1289,7 +1371,7 @@ local startPos  = UDim2.new()
 
 TB.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        if input.Position.X > TB.AbsolutePosition.X + TB.AbsoluteSize.X - 90 then return end
+        if input.Position.X > TB.AbsolutePosition.X + TB.AbsoluteSize.X - 124 then return end
         dragging  = true
         dragStart = Vector2.new(input.Position.X, input.Position.Y)
         startPos  = MF.Position
